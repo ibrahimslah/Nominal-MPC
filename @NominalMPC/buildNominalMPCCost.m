@@ -1,4 +1,4 @@
-function [H, F] = buildNominalMPCCost(xk, Alift, Blift, rlift, Xref, Q, R, N)
+function [H, F] = buildNominalMPCCost(~, xk, Alift, Blift, rlift, Xref, Q, R, N)
 %BUILDNOMINALMPCCOST
 %
 % Build the quadratic cost matrices for nominal MPC.

@@ -144,7 +144,115 @@ classdef TestLiuSafeCorridorPublicAPI < matlab.unittest.TestCase
             end
         end
 
-        function onlineLookupUsesHalfOpenIntervalsAndClamps(testCase)
+        function onlineLookupTransitionsAtFirstCenterlineOverlap(testCase)
+            [generator, corridors, path] = ...
+                testCase.generateSimulationFixture();
+            currentCorridor = corridors(2);
+            nextCorridor = corridors(3);
+            startPosition = path(2, :).';
+            tangent = path(3, :).'-startPosition;
+            tangent = tangent/norm(tangent);
+
+            % Intersect the next corridor with the current segment's
+            % centerline. Every face whose residual decreases gives a
+            % lower bound on the first feasible progress value.
+            faceSlope = nextCorridor.Axy*tangent;
+            faceSlack = nextCorridor.bxy ...
+                - nextCorridor.Axy*startPosition;
+            entryS = currentCorridor.SLimits(1) ...
+                + max(faceSlack(faceSlope < -1e-12) ...
+                ./ faceSlope(faceSlope < -1e-12));
+            testCase.verifyEqual(entryS, 16.431153392185, ...
+                'AbsTol', 1e-9);
+            testCase.verifyLessThan(entryS, currentCorridor.SLimits(2));
+
+            delta = 1e-10;
+            queries = [entryS-delta, entryS, entryS+delta, ...
+                mean([entryS, currentCorridor.SLimits(2)]), ...
+                currentCorridor.SLimits(2)-delta];
+            expectedSegments = [2, 3, 3, 3, 3];
+            beforeEntryPosition = startPosition ...
+                + tangent*(queries(1)-currentCorridor.SLimits(1));
+            insidePosition = startPosition ...
+                + tangent*(queries(4)-currentCorridor.SLimits(1));
+            testCase.verifyGreaterThan(max( ...
+                nextCorridor.Axy*beforeEntryPosition ...
+                - nextCorridor.bxy), 0);
+            testCase.verifyLessThan(max( ...
+                nextCorridor.Axy*insidePosition ...
+                - nextCorridor.bxy), 0);
+            for queryIndex = 1:numel(queries)
+                [Apath, bpath, segmentIndex] = ...
+                    generator.getPathConstraintsAtS(queries(queryIndex));
+                testCase.verifyEqual(segmentIndex, ...
+                    expectedSegments(queryIndex));
+                if segmentIndex == 2
+                    testCase.verifyEqual(Apath, currentCorridor.Apath);
+                    testCase.verifyEqual(bpath, currentCorridor.bpath);
+                else
+                    testCase.verifyConstraintsUseBaseFrame( ...
+                        Apath, bpath, currentCorridor, nextCorridor, ...
+                        [entryS, mean([entryS, ...
+                        currentCorridor.SLimits(2)]), ...
+                        currentCorridor.SLimits(2)-delta]);
+                end
+            end
+        end
+
+        function onlineLookupAdvancesAtSegmentStartWhenAlreadyOverlapping(testCase)
+            map = binaryOccupancyMap(20, 20, 1);
+            path = [5 5; 8 5; 8 8];
+            generator = LiuSafeCorridor(0.1, 5);
+            corridors = generator.generate(path, map);
+
+            startPosition = path(1, :).';
+            testCase.verifyLessThanOrEqual( ...
+                max(corridors(2).Axy*startPosition ...
+                - corridors(2).bxy), 0);
+            beforeStartS = -10;
+            beforeStartPosition = startPosition + [beforeStartS; 0];
+            testCase.verifyGreaterThan(max( ...
+                corridors(2).Axy*beforeStartPosition ...
+                - corridors(2).bxy), 0);
+            [beforeStartA, beforeStartB, beforeStartSegment] = ...
+                generator.getPathConstraintsAtS(beforeStartS);
+            testCase.verifyEqual(beforeStartSegment, 1);
+            testCase.verifyEqual(beforeStartA, corridors(1).Apath);
+            testCase.verifyEqual(beforeStartB, corridors(1).bpath);
+            [Apath, bpath, atStartSegment] = ...
+                generator.getPathConstraintsAtS(0);
+            testCase.verifyEqual(atStartSegment, 2);
+            testCase.verifyConstraintsUseBaseFrame( ...
+                Apath, bpath, corridors(1), corridors(2), [0, 1, 2]);
+        end
+
+        function onlineLookupHandlesLongNearParallelSegments(testCase)
+            map = binaryOccupancyMap(2100, 50, 0.1);
+            path = [20 20; 1020 20; 2020 20.0000001];
+            generator = LiuSafeCorridor(0.1, 10);
+            corridors = generator.generate(path, map);
+
+            % The next corridor's backward box face crosses the current
+            % centerline at s = 990.1, just before the 1000 m knot.
+            queries = [990.09, 990.1, 990.11];
+            expectedSegments = [1, 2, 2];
+            for queryIndex = 1:numel(queries)
+                [Apath, bpath, segmentIndex] = ...
+                    generator.getPathConstraintsAtS(queries(queryIndex));
+                testCase.verifyEqual(segmentIndex, ...
+                    expectedSegments(queryIndex));
+                if segmentIndex == 1
+                    testCase.verifyEqual(Apath, corridors(1).Apath);
+                    testCase.verifyEqual(bpath, corridors(1).bpath);
+                else
+                    testCase.verifyConstraintsUseBaseFrame( ...
+                        Apath, bpath, corridors(1), corridors(2), ...
+                        [queries(queryIndex), 995, 999]);
+                end
+            end
+        end
+
+        function onlineLookupUsesOverlapAtKnotsAndClamps(testCase)
             [generator, corridors] = testCase.generateShiftedFixture();
             knots = generator.CumulativeLength;
             delta = min(diff(knots))*1e-8;
@@ -153,24 +261,57 @@ classdef TestLiuSafeCorridorPublicAPI < matlab.unittest.TestCase
                 knots(2)-delta, knots(2), knots(2)+delta, ...
                 knots(3)-delta, knots(3), knots(3)+delta, ...
                 knots(end)-delta, knots(end), knots(end)+1];
-            expectedSegments = [1, 1, 1, 2, 2, 2, 3, 3, 3, 3, 3];
+            expectedSegments = [1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 3];
+            baseSegments = [1, 1, 1, 2, 2, 2, 3, 3, 3, 3, 3];
 
             testCase.verifyEqual(numel(corridors), 3);
             for queryIndex = 1:numel(queries)
                 expectedSegment = expectedSegments(queryIndex);
-                [expectedA, expectedB] = ...
-                    generator.getPathConstraints(expectedSegment);
+                baseSegment = baseSegments(queryIndex);
                 [actualA, actualB, actualSegment] = ...
                     generator.getPathConstraintsAtS(queries(queryIndex));
 
                 testCase.verifyEqual(actualSegment, expectedSegment);
-                testCase.verifyEqual(actualA, expectedA);
-                testCase.verifyEqual(actualB, expectedB);
+                if expectedSegment == baseSegment
+                    testCase.verifyEqual(actualA, ...
+                        corridors(expectedSegment).Apath);
+                    testCase.verifyEqual(actualB, ...
+                        corridors(expectedSegment).bpath);
+                else
+                    baseCorridor = corridors(baseSegment);
+                    testCase.verifyConstraintsUseBaseFrame( ...
+                        actualA, actualB, baseCorridor, ...
+                        corridors(expectedSegment), ...
+                        [mean(baseCorridor.SLimits), ...
+                        queries(queryIndex)]);
+                end
             end
         end
     end
 
     methods (Access = private)
+        function verifyConstraintsUseBaseFrame( ...
+                testCase, Apath, bpath, baseCorridor, ...
+                selectedCorridor, sSamples)
+            displacement = baseCorridor.Endpoints(:, 2) ...
+                - baseCorridor.Endpoints(:, 1);
+            tangent = displacement/norm(displacement);
+            normal = [-tangent(2); tangent(1)];
+            lateralOffsets = [-0.4, 0, 0.4];
+
+            for s = sSamples
+                for eY = lateralOffsets
+                    state = [s; 0.23; eY; 1.4; -0.6; 0.11];
+                    position = baseCorridor.Endpoints(:, 1) ...
+                        + tangent*(s-baseCorridor.SLimits(1)) ...
+                        + normal*eY;
+                    testCase.verifyEqual(Apath*state-bpath, ...
+                        selectedCorridor.Axy*position ...
+                        - selectedCorridor.bxy, 'AbsTol', 1e-11);
+                end
+            end
+        end
+
         function [generator, corridors, path] = generateShiftedFixture(~)
             map = binaryOccupancyMap(false(120, 160), 10);
             map.GridLocationInWorld = [-20 30];
@@ -179,6 +320,16 @@ classdef TestLiuSafeCorridorPublicAPI < matlab.unittest.TestCase
                 true(size(obstaclePoints, 1), 1));
             path = [-18 32; -13 32; -9 36; -5 38];
             generator = LiuSafeCorridor(0.25, 2.5);
+            corridors = generator.generate(path, map);
+        end
+
+        function [generator, corridors, path] = generateSimulationFixture(~)
+            map = binaryOccupancyMap(40, 15, 1);
+            obstaclePoints = [8 9; 14 9; 18 7; 26 11; 30 3];
+            setOccupancy(map, obstaclePoints, ...
+                ones(size(obstaclePoints, 1), 1));
+            path = [2 3; 8 3; 20 10; 32 6];
+            generator = LiuSafeCorridor(0.4, 3);
             corridors = generator.generate(path, map);
         end
     end

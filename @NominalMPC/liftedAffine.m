@@ -1,7 +1,7 @@
-function [Alift, Blift, rlift] = liftedAffine(A, B, r, N)
+function [Alift, Blift, rlift] = liftedAffine(~, A, B, r, N)
 %LIFTEDAFFINE Build lifted affine prediction model.
 %
-%   [Alift, Blift, rlift] = liftedAffine(A, B, r, N)
+%   [Alift, Blift, rlift] = obj.liftedAffine(A, B, r, N)
 %
 % Builds the lifted prediction model
 %

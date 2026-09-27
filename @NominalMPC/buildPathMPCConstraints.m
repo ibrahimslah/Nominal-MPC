@@ -1,5 +1,5 @@
 function [Aineq, bineq] = buildPathMPCConstraints( ...
-    xk, Alift, Blift, rlift, A_path, b_path, N)
+    ~, xk, Alift, Blift, rlift, A_path, b_path, N)
 %BUILDPATHMPCCONSTRAINTS
 %
 % Lifted dynamics:

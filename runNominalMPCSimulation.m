@@ -17,7 +17,7 @@ p.Iz = 8;
 p.dx = 12;
 p.dy = 20;
 p.dr = 5;
-p.SampleTime = 0.1;
+p.SampleTime = 0.01;
 p.InitialState = [2; 3; 0; 0; 0; 0];
 p.StateCovariance = diag([0; 0; 0; 0; 0; 0]);
 
@@ -27,8 +27,8 @@ Ts = p.SampleTime;
 
 path = [
      2    3
-    12    3
-    22    6
+    8    3
+    20    10
     32    6
 ];
 
@@ -60,11 +60,11 @@ corridors = corridorGenerator.generate(path, map);
 
 nx = 6;
 nu = 2;
-N = 60;
+N = 100;
 vRef = 3;
 
 % Path state: [s; ePsi; eY; vx; vy; r]. Input: [Fx; tau].
-Q = diag([0.5; 10; 50; 1; 1; 2]);
+Q = diag([.5; 10; 50; 1; 1; 2]);
 R = diag([0.01; 0.05]);
 
 FxMin = -200;
@@ -145,11 +145,13 @@ segmentHistory = segmentHistory(1:numberOfStateSamples);
 ax = corridorGenerator.plot();
 hold(ax, 'on');
 plot(ax, xCartesianHistory(1, :), xCartesianHistory(2, :), ...
-    'b-', 'LineWidth', 2);
+    'b-', 'LineWidth', 2, 'DisplayName', 'AUV trajectory');
 plot(ax, xCartesianHistory(1, 1), xCartesianHistory(2, 1), ...
-    'go', 'MarkerSize', 8, 'LineWidth', 2);
+    'go', 'MarkerSize', 8, 'LineWidth', 2, ...
+    'DisplayName', 'Start position');
 plot(ax, xCartesianHistory(1, end), xCartesianHistory(2, end), ...
-    'bo', 'MarkerSize', 8, 'LineWidth', 2);
+    'bo', 'MarkerSize', 8, 'LineWidth', 2, ...
+    'DisplayName', 'Final position');
 legend(ax, 'Location', 'best');
 hold(ax, 'off');
 

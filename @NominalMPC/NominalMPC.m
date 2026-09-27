@@ -142,7 +142,7 @@ classdef NominalMPC < handle
             end
 
             [Ad, Bd, rd] = obj.PathModel.linearizedDiscrete(xk, obj.PreviousInput);
-            [Alift, Blift, rlift] = liftedAffine(Ad, Bd, rd, obj.N);
+            [Alift, Blift, rlift] = obj.liftedAffine(Ad, Bd, rd, obj.N);
             Xref = obj.buildReferenceTrajectory(xk);
 
             [Apath, bpath, segmentIndex] = obj.CorridorManager.getPathConstraintsAtS(xk(1));
@@ -155,9 +155,9 @@ classdef NominalMPC < handle
                     'Corridor constraints must have dimensions m-by-Nx and m-by-1.');
             end
 
-            [H, f] = buildNominalMPCCost( ...
+            [H, f] = obj.buildNominalMPCCost( ...
                 xk, Alift, Blift, rlift, Xref, obj.Q, obj.R, obj.N);
-            [Aineq, bineq] = buildPathMPCConstraints( ...
+            [Aineq, bineq] = obj.buildPathMPCConstraints( ...
                 xk, Alift, Blift, rlift, Apath, bpath, obj.N);
 
             lb = repmat(obj.Umin, obj.N, 1);
@@ -203,6 +203,14 @@ classdef NominalMPC < handle
             obj.PreviousInput = zeros(obj.Nu, 1);
             obj.PreviousSolution = [];
         end
+    end
+
+    methods (Access = private)
+        [H, F] = buildNominalMPCCost(obj, xk, Alift, Blift, rlift, ...
+            Xref, Q, R, N)
+        [Aineq, bineq] = buildPathMPCConstraints(obj, xk, Alift, ...
+            Blift, rlift, A_path, b_path, N)
+        [Alift, Blift, rlift] = liftedAffine(obj, A, B, r, N)
     end
 
     methods (Access = private)

@@ -44,11 +44,14 @@ classdef LiuSafeCorridor < handle
     %   Ellipse            center, axes, semi-axes, E, and world-to-unit map
     %   AdjustedPlaneCount number of obstacle planes rotated for clearance
     %
-    % getPathConstraintsAtS uses half-open segment intervals, chooses the
-    % outgoing segment at an internal knot, and uses the first or final
-    % segment outside the path interval. Call generate before any getter or
-    % plot. The input path and map are not modified. Navigation Toolbox is
-    % required for binaryOccupancyMap; Optimization Toolbox is not used.
+    % getPathConstraintsAtS starts from half-open segment intervals, using
+    % the outgoing segment at an internal knot and the first or final
+    % segment outside the path interval. It selects the immediate next
+    % corridor early when the current centerline point is inside it. Its
+    % faces are returned in the path frame of the segment containing s.
+    % Call generate before any getter or plot. The input path and map are
+    % not modified. Navigation Toolbox is required for binaryOccupancyMap;
+    % Optimization Toolbox is not used.
 
     properties (SetAccess = private)
         %ROBOTRADIUS Circular vehicle radius in metres.
@@ -182,13 +185,44 @@ classdef LiuSafeCorridor < handle
 
         function [Apath, bpath, segmentIndex] = getPathConstraintsAtS(obj, s)
             %GETPATHCONSTRAINTSATS Select path constraints by cumulative s.
-            % Returns Apath, bpath, and the selected segment. Internal knots
-            % use the outgoing segment. Values outside the path interval use
-            % the first or final segment.
+            % Uses the centerline point at s to select the next corridor
+            % early when all its Cartesian halfspaces contain that point.
+            % When selecting early, expresses the next corridor's faces in
+            % the current segment's path frame. segmentIndex still names
+            % the selected corridor.
             segmentIndex = find( s < (obj.CumulativeLength(2:end)), 1, 'first');
             if isempty(segmentIndex)
                 segmentIndex = numel(obj.Corridors);
             end
+
+            if segmentIndex < numel(obj.Corridors)
+                segmentStart = obj.Path(segmentIndex, :).';
+                segmentVector = obj.Path(segmentIndex+1, :).'-segmentStart;
+                tangent = segmentVector/norm(segmentVector);
+                position = segmentStart ...
+                    + tangent*(s-obj.CumulativeLength(segmentIndex));
+
+                nextCorridor = obj.Corridors(segmentIndex+1);
+                tolerance = obj.scaledTolerance([position; nextCorridor.bxy]);
+                insideNextCorridor = true;
+                for faceIndex = 1:size(nextCorridor.Axy, 1)
+                    if nextCorridor.Axy(faceIndex, :)*position ...
+                            > nextCorridor.bxy(faceIndex)+tolerance
+                        insideNextCorridor = false;
+                        break
+                    end
+                end
+                if insideNextCorridor
+                    normal = [-tangent(2); tangent(1)];
+                    [Apath, bpath] = obj.cartesianToPathConstraints( ...
+                        nextCorridor.Axy, nextCorridor.bxy, ...
+                        segmentStart, tangent, normal, ...
+                        obj.CumulativeLength(segmentIndex));
+                    segmentIndex = segmentIndex+1;
+                    return
+                end
+            end
+
             Apath = obj.Corridors(segmentIndex).Apath;
             bpath = obj.Corridors(segmentIndex).bpath;
         end
@@ -207,10 +241,12 @@ classdef LiuSafeCorridor < handle
                     colors(segmentIndex, :), ...
                     'FaceAlpha', 0.18, ...
                     'EdgeColor', colors(segmentIndex, :), ...
-                    'LineWidth', 1.2);
+                    'LineWidth', 1.2, ...
+                    'DisplayName', sprintf('Safe corridor %d', segmentIndex));
             end
             plot(ax, obj.Path(:, 1), obj.Path(:, 2), 'r.-', ...
-                'LineWidth', 1.6, 'MarkerSize', 15);
+                'LineWidth', 1.6, 'MarkerSize', 15, ...
+                'DisplayName', 'Reference path');
 
             axis(ax, 'equal');
             xlim(ax, obj.MapSnapshot.XWorldLimits);
