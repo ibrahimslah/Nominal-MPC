@@ -48,7 +48,8 @@ classdef LiuSafeCorridor < handle
     % the outgoing segment at an internal knot and the first or final
     % segment outside the path interval. It selects the immediate next
     % corridor early when the current centerline point is inside it. Its
-    % faces are returned in the path frame of the segment containing s.
+    % faces are returned in the path frame of the segment containing s,
+    % or in the explicit frameSegment supplied to getPathConstraintsAtS.
     % Call generate before any getter or plot. The input path and map are
     % not modified. Navigation Toolbox is required for binaryOccupancyMap;
     % Optimization Toolbox is not used.
@@ -183,17 +184,27 @@ classdef LiuSafeCorridor < handle
             bpath = obj.Corridors(segmentIndex).bpath;
         end
 
-        function [Apath, bpath, segmentIndex] = getPathConstraintsAtS(obj, s)
+        function [Apath, bpath, segmentIndex] = getPathConstraintsAtS(obj, s, frameSegment)
             %GETPATHCONSTRAINTSATS Select path constraints by cumulative s.
             % Uses the centerline point at s to select the next corridor
             % early when all its Cartesian halfspaces contain that point.
             % When selecting early, expresses the next corridor's faces in
             % the current segment's path frame. segmentIndex still names
-            % the selected corridor.
-            segmentIndex = find( s < (obj.CumulativeLength(2:end)), 1, 'first');
-            if isempty(segmentIndex)
-                segmentIndex = numel(obj.Corridors);
+            % the selected corridor. Supply frameSegment for measured or
+            % predicted path states: their unclamped longitudinal coordinate
+            % can lie outside that frame's nominal arc-length interval.
+            if nargin < 3 || isempty(frameSegment)
+                frameSegment = find( ...
+                    s < obj.CumulativeLength(2:end), 1, 'first');
+                if isempty(frameSegment)
+                    frameSegment = numel(obj.Corridors);
+                end
+            else
+                validateattributes(frameSegment, {'numeric'}, ...
+                    {'scalar', 'real', 'finite', 'integer', ...
+                    '>=', 1, '<=', numel(obj.Corridors)});
             end
+            segmentIndex = frameSegment;
 
             if segmentIndex < numel(obj.Corridors)
                 segmentStart = obj.Path(segmentIndex, :).';

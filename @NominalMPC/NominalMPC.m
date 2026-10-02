@@ -2,6 +2,9 @@ classdef NominalMPC < handle
     %NOMINALMPC Stateful path-coordinate MPC controller for an AUV.
     %   Construct this controller after generating corridors for the same
     %   path used by pathModel. The caller owns plant stepping and logging.
+    %   The corridor manager must support getPathConstraintsAtS(s, frameSegment).
+    %   info.FrameSegmentIndex identifies the frame of PathState and all
+    %   PredictedState samples; info.SegmentIndex identifies the corridor.
 
     properties (SetAccess = private)
         PathModel
@@ -33,7 +36,8 @@ classdef NominalMPC < handle
                     ~isprop(corridorManager, 'Corridors') || ...
                     ~ismethod(corridorManager, 'getPathConstraintsAtS')
                 error('NominalMPC:InvalidCorridorManager', ...
-                    'Corridor manager must expose Path, Corridors, and getPathConstraintsAtS.');
+                    ['Corridor manager must expose Path, Corridors, and ' ...
+                    'getPathConstraintsAtS(s, frameSegment).']);
             end
             if ~isequal(corridorManager.Path, pathModel.Path)
                 error('NominalMPC:PathMismatch', ...
@@ -130,8 +134,10 @@ classdef NominalMPC < handle
             %COMPUTECONTROL Return the first MPC input for a Cartesian state.
             validateattributes(xCartesian, {'numeric'}, ...
                 {'vector', 'numel', obj.Nx, 'real', 'finite'});
-            xk = obj.PathModel.updateFromCartesian(xCartesian(:));
+            [xk, frameSegment] = obj.PathModel.updateFromCartesian(xCartesian(:));
             info = obj.emptyInfo(xk);
+            % Every state in this solve uses this fixed segment frame.
+            info.FrameSegmentIndex = frameSegment;
 
             if xk(1) >= obj.PathModel.TotalLength - obj.GoalTolerance
                 uk = zeros(obj.Nu, 1);
@@ -145,7 +151,8 @@ classdef NominalMPC < handle
             [Alift, Blift, rlift] = obj.liftedAffine(Ad, Bd, rd, obj.N);
             Xref = obj.buildReferenceTrajectory(xk);
 
-            [Apath, bpath, segmentIndex] = obj.CorridorManager.getPathConstraintsAtS(xk(1));
+            [Apath, bpath, segmentIndex] = ...
+                obj.CorridorManager.getPathConstraintsAtS(xk(1), frameSegment);
             if ~isnumeric(Apath) || size(Apath, 2) ~= obj.Nx || ...
                     ~isnumeric(bpath) || ~iscolumn(bpath) || ...
                     numel(bpath) ~= size(Apath, 1) || ...
@@ -243,6 +250,7 @@ classdef NominalMPC < handle
         function info = emptyInfo(~, xk)
             info = struct( ...
                 'PathState', xk, ...
+                'FrameSegmentIndex', [], ...
                 'SegmentIndex', [], ...
                 'InsideCorridor', [], ...
                 'Reference', [], ...

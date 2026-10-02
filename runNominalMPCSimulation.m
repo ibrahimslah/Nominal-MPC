@@ -17,7 +17,7 @@ p.Iz = 8;
 p.dx = 12;
 p.dy = 20;
 p.dr = 5;
-p.SampleTime = 0.01;
+p.SampleTime = 0.1;
 p.InitialState = [2; 3; 0; 0; 0; 0];
 p.StateCovariance = diag([0; 0; 0; 0; 0; 0]);
 
@@ -27,8 +27,8 @@ Ts = p.SampleTime;
 
 path = [
      2    3
-    8    3
-    20    10
+    10    3
+    20    6
     32    6
 ];
 
@@ -61,11 +61,11 @@ corridors = corridorGenerator.generate(path, map);
 nx = 6;
 nu = 2;
 N = 100;
-vRef = 3;
+vRef =3;
 
 % Path state: [s; ePsi; eY; vx; vy; r]. Input: [Fx; tau].
-Q = diag([.5; 10; 50; 1; 1; 2]);
-R = diag([0.01; 0.05]);
+Q = diag([.5; 10; 50; 10; 1; 2]);
+R = diag([0.01; .05]);
 
 FxMin = -200;
 FxMax = 200;
@@ -94,6 +94,8 @@ xCartesianHistory = zeros(nx, maxSimulationSteps + 1);
 xPathHistory = zeros(nx, maxSimulationSteps + 1);
 uHistory = zeros(nu, maxSimulationSteps);
 segmentHistory = zeros(1, maxSimulationSteps + 1);
+% Keep the coordinate frame separately from the selected corridor index.
+frameSegmentHistory = zeros(1, maxSimulationSteps + 1);
 xCartesianHistory(:, 1) = plant.State;
 
 numberOfSteps = 0;
@@ -105,6 +107,7 @@ for k = 1:maxSimulationSteps
     % This measurement corresponds to the state before input k is applied.
     xPathHistory(:, k) = info.PathState;
     segmentHistory(k) = info.SegmentIndex;
+    frameSegmentHistory(k) = info.FrameSegmentIndex;
     numberOfStateSamples = k;
 
     if info.GoalReached
@@ -128,17 +131,20 @@ end
 
 % If the step limit was reached, also log its final post-step state.
 if numberOfStateSamples == numberOfSteps
-    finalPathState = pathModel.updateFromCartesian(plant.State);
+    [finalPathState, finalFrameSegment] = ...
+        pathModel.updateFromCartesian(plant.State);
     xPathHistory(:, numberOfSteps + 1) = finalPathState;
+    frameSegmentHistory(numberOfSteps + 1) = finalFrameSegment;
     [~, ~, segmentHistory(numberOfSteps + 1)] = ...
-        corridorGenerator.getPathConstraintsAtS(finalPathState(1));
+        corridorGenerator.getPathConstraintsAtS(finalPathState(1), finalFrameSegment);
     numberOfStateSamples = numberOfSteps + 1;
 end
-
+%%
 xCartesianHistory = xCartesianHistory(:, 1:numberOfSteps + 1);
 xPathHistory = xPathHistory(:, 1:numberOfStateSamples);
 uHistory = uHistory(:, 1:numberOfSteps);
 segmentHistory = segmentHistory(1:numberOfStateSamples);
+frameSegmentHistory = frameSegmentHistory(1:numberOfStateSamples);
 
 %% Map, corridor, path, and vehicle trajectory
 

@@ -153,7 +153,7 @@ classdef AUVPathModel < handle
         %% Synchronize path state with Cartesian plant
         % =================================================================
 
-        function xPath = updateFromCartesian(obj, xCartesian)
+        function [xPath, segmentIndex] = updateFromCartesian(obj, xCartesian)
             %UPDATEFROMCARTESIAN
             %
             % Converts the current Cartesian plant state into path
@@ -184,8 +184,8 @@ classdef AUVPathModel < handle
                     obj.ActiveSegment);
 
 
+            % Keep the state and its local path frame synchronized.
             obj.State = xPath;
-
             obj.ActiveSegment = segmentIndex;
 
         end
@@ -461,7 +461,9 @@ classdef AUVPathModel < handle
         % =================================================================
 
         function [xPath, segmentIndex] = cartesianToPath(obj, xCartesian, segmentHint)
-
+            % Rank finite-segment distances, then express the full position
+            % in the selected frame. Retain segmentIndex with xPath: raw s
+            % can lie outside that segment's nominal arc-length interval.
 
             px  = xCartesian(1);
             py  = xCartesian(2);
@@ -483,6 +485,10 @@ classdef AUVPathModel < handle
                 candidateSegments = ...
                     1:numberOfSegments;
 
+                hasSegmentHint = false;
+
+                segmentHint = [];
+
             else
 
                 firstSegment = ...
@@ -496,6 +502,8 @@ classdef AUVPathModel < handle
                 candidateSegments = ...
                     firstSegment:lastSegment;
 
+                hasSegmentHint = true;
+
             end
 
 
@@ -504,7 +512,9 @@ classdef AUVPathModel < handle
             segmentIndex = ...
                 candidateSegments(1);
 
-            bestAlongSegment = 0;
+            bestClampedAlongSegment = 0;
+
+            bestRawAlongSegment = 0;
 
             bestProjection = ...
                 obj.Path(segmentIndex,:);
@@ -526,19 +536,19 @@ classdef AUVPathModel < handle
                     obj.SegmentLength(i);
 
 
-                localS = ...
+                rawLocalS = ...
                     dot( ...
                         position-segmentStart, ...
                         tangent);
 
 
-                localS = ...
-                    min(max(localS,0),L);
+                clampedLocalS = ...
+                    min(max(rawLocalS,0),L);
 
 
                 projection = ...
                     segmentStart ...
-                    + localS*tangent;
+                    + clampedLocalS*tangent;
 
 
                 errorVector = ...
@@ -549,21 +559,95 @@ classdef AUVPathModel < handle
                     dot(errorVector,errorVector);
 
 
-                if distanceSquared < ...
-                        minimumDistanceSquared
+                if ~isfinite(distanceSquared)
+
+                    continue
+
+                end
+
+
+                if ~isfinite(minimumDistanceSquared)
 
                     minimumDistanceSquared = ...
                         distanceSquared;
 
                     segmentIndex = i;
 
-                    bestAlongSegment = ...
-                        localS;
+                    bestClampedAlongSegment = ...
+                        clampedLocalS;
+
+                    bestRawAlongSegment = ...
+                        rawLocalS;
+
+                    bestProjection = ...
+                        projection;
+
+                    continue
+
+                end
+
+
+                % Compare distances in metres. A unit-scaled tolerance on
+                % squared distances would merge distinct near-zero errors
+                % (for example, a point 1e-9 m beyond a waypoint).
+                minimumDistance = sqrt(minimumDistanceSquared);
+                distance = sqrt(distanceSquared);
+                distanceTolerance = ...
+                    32*eps(max([1, minimumDistance, distance]));
+
+
+                isCloser = ...
+                    distance < minimumDistance-distanceTolerance;
+
+
+                isEqualDistance = ...
+                    abs(distance-minimumDistance) ...
+                    <= distanceTolerance;
+
+
+                if isCloser
+
+                    minimumDistanceSquared = ...
+                        distanceSquared;
+
+                    segmentIndex = i;
+
+                    bestClampedAlongSegment = ...
+                        clampedLocalS;
+
+                    bestRawAlongSegment = ...
+                        rawLocalS;
+
+                    bestProjection = ...
+                        projection;
+
+
+                elseif isEqualDistance && ...
+                        obj.preferSegment( ...
+                        i, clampedLocalS, ...
+                        segmentIndex, bestClampedAlongSegment, ...
+                        segmentHint, hasSegmentHint)
+
+                    segmentIndex = i;
+
+                    bestClampedAlongSegment = ...
+                        clampedLocalS;
+
+                    bestRawAlongSegment = ...
+                        rawLocalS;
 
                     bestProjection = ...
                         projection;
 
                 end
+
+            end
+
+
+            if ~isfinite(minimumDistanceSquared)
+
+                error('AUVPathModel:NoFiniteProjection', ...
+                    'No finite path projection is available.');
 
             end
 
@@ -574,7 +658,7 @@ classdef AUVPathModel < handle
 
             s = ...
                 obj.CumulativeLength(segmentIndex) ...
-                + bestAlongSegment;
+                + bestRawAlongSegment;
 
 
             % -------------------------------------------------------------
@@ -625,7 +709,7 @@ classdef AUVPathModel < handle
         %% Path -> Cartesian coordinates
         % =================================================================
 
-        function xCartesian = pathToCartesian(obj, xPath)
+        function xCartesian = pathToCartesian(obj, xPath, frameSegment)
             %PATHTOCARTESIAN
             %
             % Useful for:
@@ -633,6 +717,9 @@ classdef AUVPathModel < handle
             %   - plotting predictions
             %   - debugging MPC
             %   - checking coordinate transformations
+            %
+            % Supply frameSegment for measured or predicted states near a
+            % sharp corner, where s alone does not identify the local frame.
 
 
             s     = xPath(1);
@@ -640,8 +727,17 @@ classdef AUVPathModel < handle
             eY    = xPath(3);
 
 
-            [referencePosition, pathHeading, ~, normal] = ...
-                obj.pathGeometry(s);
+            if nargin < 3
+
+                [referencePosition, pathHeading, ~, normal] = ...
+                    obj.pathGeometry(s);
+
+            else
+
+                [referencePosition, pathHeading, ~, normal] = ...
+                    obj.pathGeometry(s, frameSegment);
+
+            end
 
 
             position = ...
@@ -669,14 +765,15 @@ classdef AUVPathModel < handle
         %% Get local path geometry from s
         % =================================================================
 
-        function [position, heading, tangent, normal, segmentIndex] = pathGeometry(obj, s)
+        function [position, heading, tangent, normal, segmentIndex] = pathGeometry(obj, s, frameSegment)
             %PATHGEOMETRY
             %
             % Return local geometry of the piecewise-linear path at
             % global arc-length coordinate s.
             %
             % The first and final segments are extrapolated if s lies
-            % slightly outside [0, TotalLength].
+            % slightly outside [0, TotalLength].  An explicit frameSegment
+            % uses that segment and localS = s-CumulativeLength(frameSegment).
 
 
             numberOfSegments = ...
@@ -687,7 +784,28 @@ classdef AUVPathModel < handle
             % Determine segment
             % -------------------------------------------------------------
 
-            if s <= 0
+            if nargin >= 3
+
+                if ~isscalar(frameSegment) || ...
+                        ~isnumeric(frameSegment) || ...
+                        ~isreal(frameSegment) || ...
+                        ~isfinite(frameSegment) || ...
+                        frameSegment ~= round(frameSegment) || ...
+                        frameSegment < 1 || ...
+                        frameSegment > numberOfSegments
+
+                    error('AUVPathModel:InvalidFrameSegment', ...
+                        'frameSegment must be a valid segment index.');
+
+                end
+
+                segmentIndex = frameSegment;
+
+                localS = ...
+                    s-obj.CumulativeLength(segmentIndex);
+
+
+            elseif s <= 0
 
                 segmentIndex = 1;
 
@@ -751,6 +869,72 @@ classdef AUVPathModel < handle
                 0
                 0
             ];
+
+        end
+
+    end
+
+
+    methods (Access = private)
+
+        function chooseCandidate = preferSegment( ...
+                obj, candidateIndex, candidateAlong, ...
+                selectedIndex, selectedAlong, ...
+                segmentHint, hasSegmentHint)
+
+            candidateLength = obj.SegmentLength(candidateIndex);
+
+            selectedLength = obj.SegmentLength(selectedIndex);
+
+            alongTolerance = ...
+                32*eps(max([1, abs(candidateAlong), ...
+                abs(selectedAlong), candidateLength, selectedLength]));
+
+
+            incomingEndsAtWaypoint = ...
+                abs(selectedAlong-selectedLength) <= alongTolerance;
+
+            outgoingStartsAtWaypoint = ...
+                abs(candidateAlong) <= alongTolerance;
+
+            isSharedWaypoint = ...
+                candidateIndex == selectedIndex+1 && ...
+                norm(obj.Path(candidateIndex,:) - ...
+                obj.Path(selectedIndex+1,:)) <= alongTolerance;
+
+
+            if isSharedWaypoint && ...
+                    incomingEndsAtWaypoint && ...
+                    outgoingStartsAtWaypoint
+
+                chooseCandidate = true;
+
+
+            elseif hasSegmentHint
+
+                if candidateIndex == segmentHint
+
+                    chooseCandidate = ...
+                        selectedIndex ~= segmentHint;
+
+                elseif selectedIndex == segmentHint
+
+                    chooseCandidate = false;
+
+                else
+
+                    chooseCandidate = ...
+                        abs(candidateIndex-segmentHint) < ...
+                        abs(selectedIndex-segmentHint);
+
+                end
+
+
+            else
+
+                chooseCandidate = false;
+
+            end
 
         end
 
